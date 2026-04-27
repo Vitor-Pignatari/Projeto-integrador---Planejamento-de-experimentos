@@ -1,0 +1,360 @@
+---
+title: "Estudo de acurácia de Modelos de Machine Learning para classificiação"
+author:
+  - "João Victor Pietchaki Gonçalves"
+  - "Leonardo Eizo Sakai"
+  - "Nicole Rodrigues do Nascimento"
+  - "Vitor Gabriel Pignatari"
+format: 
+  pdf:
+    toc: true
+    number-sections: true
+    language: "pt-BR"
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+execute:
+  echo: true
+  warning: false
+  message: false
+tidy: styler
+---
+
+```{r echo=F}
+
+library(agricolae)
+library(mvtnorm)
+library(tidyverse)
+library(caret)
+library(tseries)
+library(magrittr)
+library(stringr)
+
+```
+
+
+# Introdução
+
+Para o primeiro projeto integrador da matéria de Planejamento de Experimentos o experimento escolhido foi um estudo da acurácia de diferentes modelos de Machine Learning. O tema foi proposto considerando conceitos vistos em algumas matérias optativas, e o interesse em ver na prática quais modelos seriam mais eficientes.
+
+# Experimento
+
+## Hipóteses
+
+- H0:  Todos os modelos tem o mesmo desempenho.  
+- H1:  Pelo menos um modelo apresenta desempenho diferente dos outros.
+  
+## Fatores e Níveis
+  
+  Neste experimento serão testados quatro modelos de Machine Learning: Random Machines,  Árvores de decisão, KNN e Regressão Logística. Por ser um estudo com apenas um fator, os níveis dos fatores correspondem aos próprios tratamentos.
+  
+  
+## Unidade Experimental {#UE}
+
+As Unidades Experimentais utilizadas foram 7 simulações de duas distribuições normais bivariadas com 2500 elementos cada, sendo $C_1 = \left(\begin{array}{c}X_1\\Y_1 \end{array}\right) \sim N \left[\left(\begin{array}{c}60\\ 50 \end{array}\right), \left(\begin{array}{cc}25 & 0 \\ 0 & 25 \end{array}\right)\right]$ e $C_2 = \left(\begin{array}{c}X_2\\Y_2 \end{array}\right) \sim N \left[\left(\begin{array}{c}45\\ 60 \end{array}\right), \left(\begin{array}{cc}36 & 0 \\ 0 & 36 \end{array}\right)\right]$ resultando em amostras de 5000 elementos. Para cada simulação foram usadas as seguintes seeds: 28062005, 16071998, 11052006, 14072001, 123, 321, 123456.
+
+```{r echo=F}
+# ============================= Primeira distribuição ====================
+mu1 <- c(60, 50)
+Sigma1 <- matrix(c(25, 0,
+                   0, 25), nrow = 2)
+# ============================= Segunda distribuição =====================
+mu2 <- c(45, 60) # Matriz de médias
+Sigma2 <- matrix(
+  c(36, 0,
+    0, 36),
+  nrow = 2)
+# ============================ Dados ========================
+seeds <- c(28062005, 16071998, 11052006, 14072001, 123, 321, 123456)
+lista <- vector("list", length(seeds))
+par(mfrow = c(2,4))
+for (i in seq_along(seeds)) {
+  set.seed(seeds[i])
+  classe1 <- rmvnorm(2500, mean = mu1, sigma = Sigma1)
+  classe1 <- cbind(1, classe1)
+  classe2 <- rmvnorm(2500, mean = mu2, sigma = Sigma2)
+  classe2 <- cbind(0, classe2)
+  
+  classe <- rbind(classe1,classe2)
+  
+  cores <- ifelse(classe[,1] == 0,
+                  adjustcolor("blue", alpha.f = 0.3),
+                  adjustcolor("red", alpha.f = 0.3))
+  
+  plot(classe[,2], classe[,3], ratio = 1,
+       col = cores,
+       pch = 16,
+       xlim = c(20, 100),
+       ylim = c(20, 100),
+       xlab = 'V1', ylab = 'V2')
+  
+  lista[[i]] <- classe
+}
+```
+Neste gráfico $C_1$ está representado em vermelho e $C_2$ em azul.
+
+## Variável Resposta
+
+A variável resposta será  a acurácia dos modelos, ou seja, a proporção de classificações corretas em relação ao total de classificações feitas, calculada como $\mathrm{Acc} = \frac{nº\ de\  acertos}{total\ de\ observações}$.
+
+## Materiais e Instrumentos
+
+Este experimento foi realizado primariamente utilizando a linguagem de programação R, com as bibliotecas: mvtnorm, tidyverse, caret, rpart, caTools e class. Além disso, foi utilizado o Github, para a colaboração entre os membros do grupo e versionamento do projeto.
+
+## Casualização
+
+Dada a natureza computacional do experimento e a fim de reduzir a variação latente foi possível atribuir à cada unidade experimental todos os tratamentos.
+
+
+## Metodologia de Execução
+
+Inicialmente foram gerados os dados a partir das distribuições normais bivariadas utilizando as seeds como explicado no [item 2.3](#UE). Em sequência, foram treinados cada um dos modelos do experimento para cada amostra gerada, e calculadas as respectivas acurácias. Verificamos então as suposições do modelo linear para o DIC.
+Por fim, foi feita a análise de variância e teste de Tukey  para verificar se as diferenças entre os modelos são significativas e agrupar tratamentos com efeitos semelhantes.
+
+## Dados Coletados
+
+Devido ao grande número de dados coletados, exibimos os dados a partir de sua análise exploratória.
+
+
+```{r echo=F}
+### ============================ 6.1. Tabela de Dados ===========================
+
+# Carrega as predições para cada modelo (RL, AD, KNN e RM)
+load("dados/predicoes_RL.RData")
+load("dados/predicoes_AD.RData")
+load("dados/predicoes_KNN.RData")
+load("dados/predicoes_RM.RData")
+predicoes_RM <- predicoes
+names(predicoes_RM) <- seeds
+rm(predicoes)
+  predicoes <- list(
+  RL = predicoes_RL
+  ,AD = predicoes_AD
+  ,KNN = predicoes_KNN
+  ,RM = predicoes_RM
+)
+
+UEs <- rep(seeds, times = length(predicoes))
+
+tratamentos <- rep(names(predicoes), each = length(seeds))
+
+acuracias <- unlist(
+  lapply(predicoes, function(modelo_lista) {
+    sapply(modelo_lista, function(df) {
+      mean(df$acertos)
+    })
+  })
+)
+
+DIC <- data.frame(
+  UE = UEs,
+  Tratamento = tratamentos,
+  Acuracia = acuracias
+)
+
+```
+
+ - Acurácias dos modelos para cada réplica
+```{r echo = F}
+# Tabela bruta de dados do DIC - pivotada no formato wide
+tabela_bruta <- DIC %>%
+  pivot_wider(names_from = Tratamento, values_from = Acuracia) %>%
+  select(-UE) %>% as.matrix()
+rownames(tabela_bruta) <- seeds
+tabela_bruta <- tabela_bruta %>% t()
+dimnames(tabela_bruta) <- list(
+  Modelo = rownames(tabela_bruta),
+  Réplica = colnames(tabela_bruta)
+)
+tabela_bruta
+```
+ - Histograma das acurácias de cada modelo
+```{r echo = F}
+### ============================ 6.2. Análise Exploratória de Dados (EDA) ======
+par(mfrow = c(2,2))
+for (model in DIC$Tratamento %>% unique()) {
+  # print(paste("Análise para o modelo:", model))
+  subset_model <- DIC %>% filter(Tratamento == model)
+  
+  # Estatísticas descritivas
+  # print(summary(subset_model$Acuracia))
+  
+  # Boxplot
+  # boxplot(subset_model$Acuracia, main = paste("Boxplot -", model), ylab = "Acurácia")
+  
+  # Histograma
+  hist(subset_model$Acuracia, main = paste("Histograma -", model), xlab = "Acurácia", breaks = 10)
+  
+}
+
+```
+
+ - Boxplot das acurácias
+```{r echo = F}
+boxplot(Acuracia ~ Tratamento, data = DIC)
+
+```
+O boxplot revela um indício de que o modelo de Árvores de Decisões possui uma acurácia  abaixo dos demais modelos, enquanto estes aparentam precisões bem similares, mas com diferenças entre suas variações.
+
+
+# Checagem de adequação do modelo
+
+## Suposição de normalidade
+
+
+
+
+```{r echo=F}
+normal_JB_teste <- DIC %>% 
+  pivot_wider(names_from = Tratamento, values_from = Acuracia) %>%
+  select(-UE) %>% as.matrix %>%
+  apply(2, function(x) {return(jarque.bera.test(x))})
+normal_JB_teste
+```
+```{r}
+modelo_aov <- aov(Acuracia ~ Tratamento, data = DIC)
+jarque.bera.test(residuals(modelo_aov))
+
+```
+
+```{r}
+qqnorm(modelo_aov$residuals, main = "QQ-Plot dos Resíduos", xlab = "Quantis Teóricos", ylab = "Quantis Amostrais")
+qqline(modelo_aov$residuals, col = "red", lwd = 2)
+ 
+```
+
+Fazendo uma avaliação visual do qq-plot dos resíduos, e o teste de Jarque Bera verificamos que a suposição de normalidade dos resíduos é atendida para os dados de cada tratamento, uma vez que o p-valor de cada teste é maior que 0.05, indicando que não há evidências suficientes para rejeitar a hipótese nula de normalidade dos dados.
+
+
+## Verificação de independência
+
+Dado que os valores observados de cada tratamento seguem uma distribuição normal vamos avaliar a independência dos resíduos.
+```{r echo = F}
+##### ============================ 6.2.2.2 Independência =======================
+
+modelo_aov$residuals %>% plot(main = "Resíduos padronizados", ylab = "Resíduos", xlab = "Índice")
+
+```
+Como não observamos nenhum padrão no gráfico dos resíduos padronizados, podemos concluir que os resíduos são independentes.
+
+## Teste de homogeneidade de variâncias (Teste de Bartlett)
+
+$H_0$: As variâncias dos resíduos são homogêneas entre os tratamentos.
+
+
+$H_1$: Pelo menos um tratamento tem variância dos resíduos diferente dos outros.
+```{r echo = F}
+##### ============================ 6.2.2.2 Homogeneidaade de Variâncias ========
+bartlett_teste <- bartlett.test(Acuracia ~ Tratamento, data = DIC)
+bartlett_teste
+```
+
+Como o p-valor resultante do teste é maior do que 0.05, não rejeitamos a hipótese nula, ou seja, temos evidências de que as variâncias dos resíduos, de fato são homogêneas.
+
+# ANOVA
+
+```{r echo = F}
+summary(modelo_aov)
+```
+Como o resultado do p-valor do teste de ANOVA é menor que 0.05, rejeitamos a hipótese nula, e concluímos que há evidências de que pelo menos um dos modelos tem efeito sobre a acurácia.
+
+## Estimação dos parâmetros
+
+```{r echo =F}
+# Calculando estatísticas do Modelo Linear para o DIC
+mu <- DIC$Acuracia %>% mean()
+
+QMres <- summary(modelo_aov)[[1]]["Residuals", "Mean Sq"]
+gl <- df.residual(modelo_aov)
+
+t_value <- qt(0.975, df = df.residual(modelo_aov))
+
+chisq_value <- qchisq(0.05, summary(modelo_aov)[[1]]["Residuals", "Df"])
+
+resumo <- DIC %>%
+  group_by(Tratamento) %>%
+  summarise(
+    mu_i_inf = mean(Acuracia) - t_value * sqrt(QMres / n()),
+    mu_i = mean(Acuracia),
+    mu_i_sup = mean(Acuracia) + t_value * sqrt(QMres / n()),
+    mu = mu,
+    sigma2 = QMres,
+    sigma2_sup = gl * QMres / chisq_value
+  )
+
+ggplot(resumo, aes(x = Tratamento, y = mu_i)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mu_i_inf, ymax = mu_i_sup), width = 0.2) +
+  geom_hline(yintercept = unique(DIC$Acuracia) %>% mean(), linetype = "dashed") +
+  labs(
+    title = stringr::str_wrap("Estimativas Pontuais e Intervalares para a Acurácia por Tratamento", width = 40),
+    y = "Acurácia",
+    x = "Tratamento"
+  ) +
+  theme_minimal()
+```
+
+
+O gráfico acima mostra os intervalos com 95% de confiança para as médias de cada modelo de acordo com a equação:
+$$IC[\mu_i, 95\%] = \left[\mu_i - t_{24, \alpha = 0.025} \cdot \sqrt{\frac{QMres}{r_i}}, \mu_i + t_{24, \alpha = 0.025} \cdot \sqrt{\frac{QMres}{r_i}}\right]$$.
+Conforme os valores descritos na tabela para cada tratamento.
+
+
+```{r echo = F}
+names(resumo)[1:4] <- c("Tratamento", "Limite inferior", "Estimativa Pontual", "Limite superior")
+
+resumo[,1:4]
+
+```
+
+## Teste de Tukey
+```{r echo = F}
+TukeyHSD(modelo_aov)
+tukey <- HSD.test(modelo_aov, "Tratamento", group = TRUE)
+tukey$groups
+```
+
+O teste de Tukey revelou que os modelos de Regressão Logística, Random Machines e KNN possuem variações semelhantes entre si, e que a variação do modelo de Árvores de Decisão é diferente dos demais modelos, o que está de acordo com o que observamos na análise exploratória inicial.
+
+# Conclusão
+
+Com todos os testes de adequação de com as suposiçãos do modelo, podemos concluir que o modelo de ANOVA é adequado para a análise dos dados, e que as conclusões tiradas a partir dele são confiáveis.
+
+O teste da ANOVA revela que de fato há evidências de que pelo menos um dos modelos possui variância divergente dos outros modelos.
+
+Como não havia nenhuma suposição prévia sobre os modelos, realizamos em seguida o teste de Tukey que separou os quatro modelos em dois grupos de variações, Grupo A para Regressão Logística, Random Machines e KNN, e grupo B para Árvore de Decisão.
+
+Podemos concluír que para este problema de classificação, onde ambas as duas distribuições de cada classe seguem distribuição normal e são quase linearmente separáveis, o modelo de árvore de decisão irá performar pior que os demais modelos.
+
+
+# Recomendações para estudos futuros
+
+Para estudos futuros:
+
+ * Mudar o mecanismo gerador dos dados
+
+ * Testar outros fatores como tamanho da amostra
+
+ * Dados com comportamentos diferentes, como não linear e não simétricos
+
+ * Realizar o experimento em dados reais
+
+ * Quantidades de covariáveis
+
+ * Tipos de covariáveis diferentes, como categóricas e ordinais
+ 
+
+
+# Referências
+
+Códigos utilizados disponíveis em:
+[https://github.com/Vitor-Pignatari/Projeto-integrador---Planejamento-de-experimentos](https://github.com/Vitor-Pignatari/Projeto-integrador---Planejamento-de-experimentos)
+
+RIBEIRO JUNIOR, Paulo Justiniano; MAYER, Fernando Pol. Materiais da disciplina CE312. Curitiba: LEG/DEST/UFPR. Disponível em: [http://www.leg.ufpr.br/~paulojus/CE312/materiais.html](http://www.leg.ufpr.br/~paulojus/CE312/materiais.html). Último acesso em: 26 abr. 2026.
+
+Anderson Ara, Mateus Maia, Francisco Louzada, Samuel Macêdo, Random Machines: A Bagged-Weighted Support Vector Model with Free Kernel Choice, J. data sci. 19(2021), no. 3, 409-428, DOI 10.6339/21-JDS1014. Disponível em: [https://jds-online.org/journal/JDS/article/899/info](https://jds-online.org/journal/JDS/article/899/info)
+
+PEREZ, Fernando Lucambio. Notas de aula, 2026. Disponível em: [https://estatistica.c3sl.ufpr.br/~lucambio/CE313/20241S/ENP03.pdf . ](https://estatistica.c3sl.ufpr.br/~lucambio/CE313/20241S/ENP03.pdf) Último acesso em: 26 abr. 2026.
+
+MENDES, Amanda Merian Freitas. Notas de aula, 2026. 
